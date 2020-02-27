@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
+	"fmt"
 )
 
 const (
@@ -57,7 +58,14 @@ func worker(queue workqueue.RateLimitingInterface, process func(key string) (tim
 				if quit {
 					return true
 				}
-				defer queue.Done(key)
+				defer func() {
+					r := recover()
+					if err, ok := r.(error); ok {
+						fmt.Println("Recovered: ", err.Error())
+					}
+					queue.Done(key)
+				}()
+
 
 				when, err := process(key.(string))
 				if err == nil && when != 0 {
