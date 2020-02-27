@@ -15,6 +15,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal/storage/dberr"
 )
 
 const (
@@ -43,6 +44,19 @@ func (s *CreateRuntimeStep) Name() string {
 }
 
 func (s *CreateRuntimeStep) Run(operation internal.ProvisioningOperation, log logrus.FieldLogger) (internal.ProvisioningOperation, time.Duration, error) {
+
+	// proceed if instance not exists
+	_, err := s.instanceStorage.GetByID(operation.InstanceID)
+	switch {
+	case err == nil:
+		log.Info("Instance exists, skipping")
+		return operation, 0, nil
+	case dberr.IsNotFound(err):
+	default:
+		log.Errorf("Unable to get instance from storage")
+		return operation, time.Second, nil
+	}
+
 	if time.Since(operation.UpdatedAt) > CreateRuntimeTimeout {
 		log.Infof("operation has reached the time limit: updated operation time: %s", operation.UpdatedAt)
 		return s.operationManager.OperationFailed(operation, fmt.Sprintf("operation has reached the time limit: %s", CreateRuntimeTimeout))

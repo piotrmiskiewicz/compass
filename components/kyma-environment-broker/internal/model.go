@@ -10,6 +10,7 @@ import (
 
 	"github.com/pivotal-cf/brokerapi/v7/domain"
 	"github.com/pkg/errors"
+	"fmt"
 )
 
 type ProvisionInputCreator interface {
@@ -55,7 +56,7 @@ type ProvisioningOperation struct {
 	ProvisioningParameters string `json:"provisioning_parameters"`
 
 	// following fields are not stored in the storage
-	InputCreator ProvisionInputCreator
+	InputCreator ProvisionInputCreator `json:"-"` // do not serialize it
 }
 
 // NewProvisioningOperation creates a fresh (just starting) instance of the ProvisioningOperation
@@ -84,7 +85,7 @@ func (po *ProvisioningOperation) GetProvisioningParameters() (ProvisioningParame
 
 	err := json.Unmarshal([]byte(po.ProvisioningParameters), &pp)
 	if err != nil {
-		return pp, errors.Wrap(err, "while unmarshaling provisioning parameters")
+		return pp, errors.Wrap(err, fmt.Sprintf("while unmarshaling provisioning parameters: '%s'", po.ProvisioningParameters))
 	}
 
 	return pp, nil

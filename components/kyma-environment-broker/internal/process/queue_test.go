@@ -1,64 +1,89 @@
-package process
+package process_test
 
 import (
 	"testing"
 	"time"
-	"fmt"
 	"github.com/sirupsen/logrus"
 	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal/storage"
-	"golang.org/x/tools/go/cfg"
 	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal/process/provisioning"
 	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal/provisioner"
 	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal"
 	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal/process/provisioning/input"
+	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal/runtime"
+	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal/director"
+	"github.com/stretchr/testify/require"
+	"github.com/kyma-incubator/compass/components/kyma-environment-broker/internal/process"
+	schema "github.com/kyma-incubator/compass/components/provisioner/pkg/gqlschema"
 )
 
-type e struct {
-
-}
-
-func (e) Execute(opId string) (time.Duration, error) {
-	fmt.Printf("---- %s\n", opId)
-	panic(fmt.Errorf("hi there!"))
-	return 5 * time.Second, nil
-}
-
 func TestQueue_Run(t *testing.T) {
+
 	l := logrus.StandardLogger()
 	memoryStorage := storage.NewMemoryStorage()
 	repo := memoryStorage.Operations()
-	mgr := NewManager(repo, l)
+	iRepo := memoryStorage.Instances()
+	mgr := process.NewManager(repo, l)
 	provisionerClient := provisioner.NewFakeClient()
 
-	inputFactory := input.NewInputBuilderFactory(optComponentsSvc, fullRuntimeComponentList, cfg.Provisioning, cfg.KymaVersion)
+	runtimeProvider := runtime.NewComponentsListProvider("1.10.0", "managed-runtime-components.yaml")
+	fullRuntimeComponentList, err := runtimeProvider.AllComponents()
+	require.NoError(t, err)
+
+	optionalComponentsDisablers := runtime.ComponentsDisablers{
+		"Loki":       runtime.NewLokiDisabler(),
+		"Kiali":      runtime.NewGenericComponentDisabler("kiali", "kyma-system"),
+		"Jaeger":     runtime.NewGenericComponentDisabler("jaeger", "kyma-system"),
+		"Monitoring": runtime.NewGenericComponentDisabler("monitoring", "kyma-system"),
+	}
+
+	optComponentsSvc := runtime.NewOptionalComponentsService(optionalComponentsDisablers)
+
+
+	inputFactory := input.NewInputBuilderFactory(optComponentsSvc, fullRuntimeComponentList, input.Config{
+
+	}, "1.10.0")
 
 
 	// create and run queue, steps provisioning
 	inputInitialisation := provisioning.NewInputInitialisationStep(repo, inputFactory, "http://dummy.com")
 
-	runtimeStep := provisioning.NewCreateRuntimeStep(repo, provisionerClient, internal.ServiceManagerOverride{
+	runtimeStep := provisioning.NewCreateRuntimeStep(repo, iRepo, provisionerClient, internal.ServiceManagerOverride{
 		URL: "http://dummy.com",
 	})
-	runtimeStatusStep := provisioning.NewRuntimeStatusStep(repo, memoryStorage.Instances(), provisionerClient, directorClient)
+	dCli := director.NewFakeDirectorClient()
+	runtimeStatusStep := provisioning.NewRuntimeStatusStep(repo, iRepo, provisionerClient, dCli)
 
-	stepManager.InitStep(inputInitialisation)
+	mgr.InitStep(inputInitialisation)
 
-	stepManager.AddStep(1, runtimeStep)
-	stepManager.AddStep(2, runtimeStatusStep)
+	mgr.AddStep(1, runtimeStep)
+	mgr.AddStep(2, runtimeStatusStep)
 
-	q := NewQueue(mgr)
+	q := process.NewQueue(mgr)
 
 	sCh := make(chan struct{})
 	q.Run(sCh)
 
-	q.Add("001")
+	po, _ := internal.NewProvisioningOperation("i-001", internal.ProvisioningParameters{
+		ServiceID: "47c9dcbf-ff30-448e-ab36-d3bad66ba281",
+		PlanID: "ca6e5357-707f-4565-bbbd-b3ab732597c6",
+	})
 
-	go func() {
-		for {
-			fmt.Println(time.Now())
-			time.Sleep(1 * time.Second)
-		}
-	}()
-	time.Sleep(10 * time.Minute)
+	repo.InsertProvisioningOperation(po)
 
+	q.Add(po.ID)
+
+
+	time.Sleep(3 * time.Minute)
+
+	op, _ := repo.GetProvisioningOperationByID(po.ID)
+
+	provisionerClient.SetOperation(op.ProvisionerOperationID, schema.OperationStatus{
+		State: schema.OperationStateSucceeded,
+	})
+	time.Sleep(65 * time.Second)
+	inst, _ := iRepo.GetByID(op.InstanceID)
+	dCli.SetConsoleURL(inst.RuntimeID, "http://done.com")
+
+	time.Sleep(5 * time.Minute)
+	t.Fail()
 }

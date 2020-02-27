@@ -6,7 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
-	"fmt"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -46,6 +46,7 @@ func createWorker(queue workqueue.RateLimitingInterface, process func(id string)
 	go func() {
 		wait.Until(worker(queue, process), time.Second, stopCh)
 		waitGroup.Done()
+		logrus.Error("Worker done")
 	}()
 }
 
@@ -56,19 +57,25 @@ func worker(queue workqueue.RateLimitingInterface, process func(key string) (tim
 			exit = func() bool {
 				key, quit := queue.Get()
 				if quit {
+					logrus.Warnf("Queue end!!!")
 					return true
 				}
 				defer func() {
 					r := recover()
-					if err, ok := r.(error); ok {
-						fmt.Println("Recovered: ", err.Error())
+					if r != nil {
+						logrus.Errorf("Panic handled: %s", r)
 					}
 					queue.Done(key)
+					logrus.Infof("Queue.len %d", queue.NumRequeues(key))
+
+
 				}()
 
 
 				when, err := process(key.(string))
+				logrus.Infof("When: %s", when)
 				if err == nil && when != 0 {
+					logrus.Infof("Adding after %s %s", key, when)
 					queue.AddAfter(key, when)
 					return false
 				}
